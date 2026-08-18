@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { ref, onValue } from 'firebase/database';
+import { db } from '@/lib/firebase';
 import { loadSettings, type AppSettings } from '@/lib/settings';
-
-const FIREBASE_URL = 'https://pro21-c2b3e-default-rtdb.asia-southeast1.firebasedatabase.app/home.json';
 
 type AntState = {
   x: number;
@@ -66,14 +66,16 @@ export default function OrbAnt() {
   const settingsRef = useRef<AppSettings>(loadSettings());
 
   useEffect(() => {
-    // Fetch Firebase home data
-    fetch(FIREBASE_URL)
-      .then((r) => r.json())
-      .then((d) => setHomeData(d))
-      .catch(() => {});
+    // Firebase 실시간 리스너
+    const homeRef = ref(db, 'home');
+    const unsubscribe = onValue(homeRef, (snapshot) => {
+      setHomeData(snapshot.val());
+    });
 
     // Report visit
     fetch('/api/analytics/visit', { method: 'POST' }).catch(() => {});
+
+    return () => unsubscribe();
 
     // Hot-reload settings when admin changes them
     const onStorage = () => {
