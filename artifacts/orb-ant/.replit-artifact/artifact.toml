@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "ORB ANT"
+description = "An interactive media art web experience featuring a spherical-bodied ant that autonomously roams the canvas. The ant responds to mouse movement and clicks, leaves a fading trail, and behaves like an interactive art installation piece — minimalist black and white aesthetic."
+version = "1.0.0"
+id = "artifacts/orb-ant"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19185
+
+[services.development]
+run = "pnpm --filter @workspace/orb-ant run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/orb-ant", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/orb-ant/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19185"
+BASE_PATH = "/"
