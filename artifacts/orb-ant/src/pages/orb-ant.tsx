@@ -156,13 +156,13 @@ export default function OrbAnt() {
       if (dist < HIT_RADIUS) {
         const isFlee = antRef.current.state === 'fleeing';
         const points = isFlee ? 10 : 1;
-        // Functional update: guarantees accumulation even under React 18 batching.
-        // scoreRef stays in sync so the loop can read it if needed.
-        setDisplayScore(prev => {
-          const next = prev + points;
-          scoreRef.current = next;
-          return next;
-        });
+        // Mutate ref FIRST (synchronous, no batching) then push the exact
+        // accumulated value to React state.  Never use functional-update form
+        // here — prev inside the updater can be stale when React batches or
+        // replays the updater (Strict Mode).
+        const newScore = Math.min(scoreRef.current + points, 99999);
+        scoreRef.current = newScore;
+        setDisplayScore(newScore);
         // SCORE number pulse
         setScoreScale(isFlee ? 1.5 : 1.3);
         setTimeout(() => setScoreScale(1), 180);
