@@ -1,9 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ref, onValue } from 'firebase/database';
 import { Link } from 'wouter';
-import { db } from '@/lib/firebase';
 import { loadSettings, type AppSettings } from '@/lib/settings';
-import { useAuth } from '@/contexts/auth-context';
+import { useAuth, GUEST_SCORE_KEY } from '@/contexts/auth-context';
 
 type ScorePopup = {
   x: number;
@@ -42,14 +40,14 @@ type TrailPoint = {
 
 export default function OrbAnt() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [homeData, setHomeData] = useState<Record<string, string> | null>(null);
   const [displayScore, setDisplayScore] = useState(0);
   const [scoreScale, setScoreScale] = useState(1);
   const scoreRef = useRef(0);
   const popupsRef = useRef<ScorePopup[]>([]);
   const comboRef = useRef({ count: 0, timer: 0, displayTimer: 0, lastX: 0, lastY: 0 });
   const shakeRef = useRef({ timer: 0 });
-  const { user, loading: authLoading, signIn, signOut } = useAuth();
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { user, loading: authLoading, signOut, saveScore } = useAuth();
 
   const antRef = useRef<AntState>({
     x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500,
@@ -82,25 +80,32 @@ export default function OrbAnt() {
 
   const settingsRef = useRef<AppSettings>(loadSettings());
 
+  // Guest score carryover: if the user navigated from '/' to '/login',
+  // '/' saves the current score to sessionStorage before unmounting.
   useEffect(() => {
-    // Firebase 실시간 리스너
-    const homeRef = ref(db, 'home');
-    const unsubscribe = onValue(homeRef, (snapshot) => {
-      setHomeData(snapshot.val());
-    });
-
-    // Report visit
+    const stored = sessionStorage.getItem(GUEST_SCORE_KEY);
+    if (stored) {
+      const n = parseInt(stored, 10) || 0;
+      if (n > 0) {
+        setDisplayScore(n);
+        scoreRef.current = n;
+      }
+      sessionStorage.removeItem(GUEST_SCORE_KEY);
+    }
     fetch('/api/analytics/visit', { method: 'POST' }).catch(() => {});
-
-    return () => unsubscribe();
-
-    // Hot-reload settings when admin changes them
-    const onStorage = () => {
-      settingsRef.current = loadSettings();
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
   }, []);
+
+  // Debounced score save to Firebase (3 s after last change, logged-in only)
+  useEffect(() => {
+    if (!user) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const best = Math.max(user.profile.bestScore ?? 0, displayScore);
+      saveScore(displayScore, best);
+    }, 3000);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayScore, user?.uid]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -579,117 +584,132 @@ export default function OrbAnt() {
           margin: 0, padding: 0,
         }}
       />
-      {/* Top-right: Firebase home data + Score */}
-      <div
-        style={{
-          position: 'fixed',
-          top: 24,
-          right: 24,
-          textAlign: 'right',
-          pointerEvents: 'none',
-          fontFamily: 'Inter, sans-serif',
-          userSelect: 'none',
-        }}
-      >
-        {homeData?.name && (
-          <>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.02em' }}>
-              {homeData.name}
-            </p>
-            {homeData['대학교'] && (
-              <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em' }}>
-                {homeData['대학교']}
-              </p>
-            )}
-          </>
-        )}
-        <p
-          style={{
-            margin: homeData?.name ? '14px 0 0' : '0',
-            fontSize: 11,
-            fontWeight: 300,
-            color: 'rgba(255,255,255,0.35)',
-            letterSpacing: '0.12em',
-          }}
-        >
-          SCORE&nbsp;&nbsp;<span
-            style={{
-              display: 'inline-block',
-              transform: `scale(${scoreScale})`,
-              transition: 'transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)',
-              transformOrigin: 'center center',
-              color: scoreScale > 1 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)',
-            }}
-          >{displayScore}</span>
-        </p>
-      </div>
-
-      {/* Auth indicator — bottom left */}
+      {/* ── Top-right panel ─────────────────────────────────────────── */}
       {!authLoading && (
         <div
           style={{
             position: 'fixed',
-            bottom: 20,
-            left: 20,
+            top: 24,
+            right: 24,
+            textAlign: 'right',
             fontFamily: 'Inter, sans-serif',
+            userSelect: 'none',
             zIndex: 9998,
           }}
         >
           {user ? (
-            /* 로그인 상태 */
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {user.profile.photoURL && (
-                <img
-                  src={user.profile.photoURL}
-                  alt=""
-                  style={{
+            /* ── 로그인 상태 ── */
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
+              {/* Profile row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                {user.profile.photoURL ? (
+                  <img
+                    src={user.profile.photoURL}
+                    alt=""
+                    style={{
+                      width: 22, height: 22, borderRadius: '50%',
+                      opacity: 0.65, border: '1px solid rgba(255,255,255,0.2)',
+                      order: 2,
+                    }}
+                  />
+                ) : (
+                  /* Initials avatar for email users */
+                  <div style={{
                     width: 22, height: 22, borderRadius: '50%',
-                    opacity: 0.6, border: '1px solid rgba(255,255,255,0.2)',
-                  }}
-                />
-              )}
-              <div>
-                <p style={{ margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.04em' }}>
-                  {user.profile.name}
-                </p>
-                {user.profile.role === 'admin' && (
-                  <p style={{ margin: '1px 0 0', fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                    Admin
-                  </p>
+                    background: 'rgba(255,255,255,0.1)',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 600,
+                    order: 2,
+                  }}>
+                    {user.profile.name.charAt(0).toUpperCase()}
+                  </div>
                 )}
+                <div style={{ order: 1 }}>
+                  <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.8)', letterSpacing: '0.02em' }}>
+                    {user.profile.name}
+                  </p>
+                  <p style={{ margin: '2px 0 0', fontSize: 9, fontWeight: 300, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.03em' }}>
+                    {user.profile.email}
+                  </p>
+                  {user.profile.role === 'admin' && (
+                    <p style={{ margin: '1px 0 0', fontSize: 8, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                      Admin
+                    </p>
+                  )}
+                </div>
               </div>
+
+              {/* Scores */}
+              <div style={{ pointerEvents: 'none' }}>
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.12em' }}>
+                  SCORE&nbsp;&nbsp;<span
+                    style={{
+                      display: 'inline-block',
+                      transform: `scale(${scoreScale})`,
+                      transition: 'transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                      transformOrigin: 'right center',
+                      color: scoreScale > 1 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)',
+                    }}
+                  >{displayScore}</span>
+                </p>
+                <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 300, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.12em' }}>
+                  BEST&nbsp;&nbsp;{user.profile.bestScore ?? 0}
+                </p>
+              </div>
+
+              {/* Log out */}
               <button
                 onClick={() => signOut()}
                 style={{
-                  marginLeft: 4,
+                  marginTop: 10,
                   background: 'none', border: 'none',
-                  fontSize: 9, color: 'rgba(255,255,255,0.2)',
-                  cursor: 'pointer', letterSpacing: '0.08em',
+                  fontSize: 9, color: 'rgba(255,255,255,0.18)',
+                  cursor: 'pointer', letterSpacing: '0.1em',
                   textTransform: 'uppercase', padding: 0,
                   fontFamily: 'Inter, sans-serif',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
+                onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.18)')}
               >
-                Sign out
+                Log out
               </button>
             </div>
           ) : (
-            /* 비로그인 상태 */
-            <Link href="/login">
-              <span
-                style={{
-                  fontSize: 10, color: 'rgba(255,255,255,0.2)',
-                  cursor: 'pointer', letterSpacing: '0.1em',
-                  textTransform: 'uppercase',
-                  transition: 'color 0.2s',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
-              >
-                Sign in
-              </span>
-            </Link>
+            /* ── Guest 상태 ── */
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0, pointerEvents: 'none' }}>
+              <p style={{ margin: 0, fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.14em' }}>
+                GUEST
+              </p>
+              <p style={{ margin: '6px 0 0', fontSize: 11, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.12em' }}>
+                SCORE&nbsp;&nbsp;<span
+                  style={{
+                    display: 'inline-block',
+                    transform: `scale(${scoreScale})`,
+                    transition: 'transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                    transformOrigin: 'right center',
+                    color: scoreScale > 1 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)',
+                  }}
+                >{displayScore}</span>
+              </p>
+              <Link href="/login">
+                <span
+                  onClick={() => sessionStorage.setItem(GUEST_SCORE_KEY, String(displayScore))}
+                  style={{
+                    display: 'inline-block',
+                    marginTop: 8,
+                    fontSize: 9, color: 'rgba(255,255,255,0.2)',
+                    cursor: 'pointer', letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    pointerEvents: 'auto',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
+                >
+                  Sign in →
+                </span>
+              </Link>
+            </div>
           )}
         </div>
       )}
