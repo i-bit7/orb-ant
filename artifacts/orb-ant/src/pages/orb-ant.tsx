@@ -5,6 +5,13 @@ import { db } from '@/lib/firebase';
 import { loadSettings, type AppSettings } from '@/lib/settings';
 import { useAuth } from '@/contexts/auth-context';
 
+type ScorePopup = {
+  x: number;
+  y: number;
+  value: number;
+  age: number;
+};
+
 type AntState = {
   x: number;
   y: number;
@@ -35,6 +42,9 @@ type TrailPoint = {
 export default function OrbAnt() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [homeData, setHomeData] = useState<Record<string, string> | null>(null);
+  const [displayScore, setDisplayScore] = useState(0);
+  const scoreRef = useRef(0);
+  const popupsRef = useRef<ScorePopup[]>([]);
   const { user, loading: authLoading, signIn, signOut } = useAuth();
 
   const antRef = useRef<AntState>({
@@ -129,6 +139,17 @@ export default function OrbAnt() {
       const dx = antRef.current.x - clientX;
       const dy = antRef.current.y - clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
+
+      // Score: hitting the ant (within 35px)
+      const HIT_RADIUS = 35;
+      if (dist < HIT_RADIUS) {
+        const points = antRef.current.state === 'fleeing' ? 10 : 1;
+        scoreRef.current += points;
+        setDisplayScore(scoreRef.current);
+        popupsRef.current.push({ x: antRef.current.x, y: antRef.current.y, value: points, age: 0 });
+      }
+
+      // Existing flee trigger (unchanged)
       if (dist < 250) {
         antRef.current.state = 'fleeing';
         antRef.current.targetAngle = Math.atan2(dy, dx);
@@ -383,6 +404,29 @@ export default function OrbAnt() {
         ctx.fillText('move your cursor', width / 2, height - 24);
       }
 
+      // Score popups (+1 / +10)
+      const popups = popupsRef.current;
+      for (let i = popups.length - 1; i >= 0; i--) {
+        const p = popups[i];
+        p.age++;
+        if (p.age > 80) { popups.splice(i, 1); continue; }
+        let pa = 0;
+        if (p.age < 10) pa = p.age / 10;
+        else if (p.age < 50) pa = 1;
+        else pa = 1 - (p.age - 50) / 30;
+        const py = p.y - (p.age / 80) * 44;
+        ctx.save();
+        ctx.globalAlpha = pa;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = p.value >= 10
+          ? '700 18px Inter, sans-serif'
+          : '400 14px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`+${p.value}`, p.x, py);
+        ctx.restore();
+      }
+
       // Flee notice
       if (state.noticeTimer >= 0) {
         state.noticeTimer++;
@@ -430,29 +474,42 @@ export default function OrbAnt() {
           margin: 0, padding: 0,
         }}
       />
-      {/* Firebase home data — top right */}
-      {homeData?.name && (
-        <div
+      {/* Top-right: Firebase home data + Score */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 24,
+          right: 24,
+          textAlign: 'right',
+          pointerEvents: 'none',
+          fontFamily: 'Inter, sans-serif',
+          userSelect: 'none',
+        }}
+      >
+        {homeData?.name && (
+          <>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.02em' }}>
+              {homeData.name}
+            </p>
+            {homeData['대학교'] && (
+              <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em' }}>
+                {homeData['대학교']}
+              </p>
+            )}
+          </>
+        )}
+        <p
           style={{
-            position: 'fixed',
-            top: 24,
-            right: 24,
-            textAlign: 'right',
-            pointerEvents: 'none',
-            fontFamily: 'Inter, sans-serif',
-            userSelect: 'none',
+            margin: homeData?.name ? '14px 0 0' : '0',
+            fontSize: 11,
+            fontWeight: 300,
+            color: 'rgba(255,255,255,0.35)',
+            letterSpacing: '0.12em',
           }}
         >
-          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.02em' }}>
-            {homeData.name}
-          </p>
-          {homeData['대학교'] && (
-            <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em' }}>
-              {homeData['대학교']}
-            </p>
-          )}
-        </div>
-      )}
+          SCORE&nbsp;&nbsp;{displayScore}
+        </p>
+      </div>
 
       {/* Auth indicator — bottom left */}
       {!authLoading && (
