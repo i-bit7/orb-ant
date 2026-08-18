@@ -1,5 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { loadSettings, type AppSettings } from '@/lib/settings';
+
+const FIREBASE_URL = 'https://pro21-c2b3e-default-rtdb.asia-southeast1.firebasedatabase.app/home.json';
 
 type AntState = {
   x: number;
@@ -30,6 +32,7 @@ type TrailPoint = {
 
 export default function OrbAnt() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [homeData, setHomeData] = useState<Record<string, string> | null>(null);
 
   const antRef = useRef<AntState>({
     x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500,
@@ -63,6 +66,12 @@ export default function OrbAnt() {
   const settingsRef = useRef<AppSettings>(loadSettings());
 
   useEffect(() => {
+    // Fetch Firebase home data
+    fetch(FIREBASE_URL)
+      .then((r) => r.json())
+      .then((d) => setHomeData(d))
+      .catch(() => {});
+
     // Report visit
     fetch('/api/analytics/visit', { method: 'POST' }).catch(() => {});
 
@@ -403,17 +412,42 @@ export default function OrbAnt() {
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        display: 'block',
-        position: 'fixed',
-        top: 0, left: 0,
-        width: '100%', height: '100%',
-        cursor: 'none',
-        background: '#000',
-        margin: 0, padding: 0,
-      }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        style={{
+          display: 'block',
+          position: 'fixed',
+          top: 0, left: 0,
+          width: '100%', height: '100%',
+          cursor: 'none',
+          background: '#000',
+          margin: 0, padding: 0,
+        }}
+      />
+      {/* Firebase home data — top right */}
+      {homeData?.name && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 24,
+            right: 24,
+            textAlign: 'right',
+            pointerEvents: 'none',
+            fontFamily: 'Inter, sans-serif',
+            userSelect: 'none',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.02em' }}>
+            {homeData.name}
+          </p>
+          {homeData['대학교'] && (
+            <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em' }}>
+              {homeData['대학교']}
+            </p>
+          )}
+        </div>
+      )}
+    </>
   );
 }
