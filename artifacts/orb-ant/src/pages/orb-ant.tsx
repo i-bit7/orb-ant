@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ref, onValue } from 'firebase/database';
+import { Link } from 'wouter';
 import { db } from '@/lib/firebase';
 import { loadSettings, type AppSettings } from '@/lib/settings';
+import { useAuth } from '@/contexts/auth-context';
 
 type AntState = {
   x: number;
@@ -33,6 +35,7 @@ type TrailPoint = {
 export default function OrbAnt() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [homeData, setHomeData] = useState<Record<string, string> | null>(null);
+  const { user, loading: authLoading, signIn, signOut } = useAuth();
 
   const antRef = useRef<AntState>({
     x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500,
@@ -447,6 +450,76 @@ export default function OrbAnt() {
             <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 300, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em' }}>
               {homeData['대학교']}
             </p>
+          )}
+        </div>
+      )}
+
+      {/* Auth indicator — bottom left */}
+      {!authLoading && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 20,
+            left: 20,
+            fontFamily: 'Inter, sans-serif',
+            zIndex: 9998,
+          }}
+        >
+          {user ? (
+            /* 로그인 상태 */
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {user.profile.photoURL && (
+                <img
+                  src={user.profile.photoURL}
+                  alt=""
+                  style={{
+                    width: 22, height: 22, borderRadius: '50%',
+                    opacity: 0.6, border: '1px solid rgba(255,255,255,0.2)',
+                  }}
+                />
+              )}
+              <div>
+                <p style={{ margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.04em' }}>
+                  {user.profile.name}
+                </p>
+                {user.profile.role === 'admin' && (
+                  <p style={{ margin: '1px 0 0', fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                    Admin
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => signOut()}
+                style={{
+                  marginLeft: 4,
+                  background: 'none', border: 'none',
+                  fontSize: 9, color: 'rgba(255,255,255,0.2)',
+                  cursor: 'pointer', letterSpacing: '0.08em',
+                  textTransform: 'uppercase', padding: 0,
+                  fontFamily: 'Inter, sans-serif',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            /* 비로그인 상태 */
+            <Link href="/login">
+              <span
+                style={{
+                  fontSize: 10, color: 'rgba(255,255,255,0.2)',
+                  cursor: 'pointer', letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                  transition: 'color 0.2s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
+              >
+                Sign in
+              </span>
+            </Link>
           )}
         </div>
       )}
