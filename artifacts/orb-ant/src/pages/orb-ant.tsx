@@ -2,6 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { loadSettings, type AppSettings } from '@/lib/settings';
 import { useAuth, GUEST_SCORE_KEY } from '@/contexts/auth-context';
+import {
+  fetchPlayData, writePlayData,
+  type PlayData, type DBUser,
+} from '@/lib/auth';
 
 type ScorePopup = {
   x: number;
@@ -49,6 +53,13 @@ export default function OrbAnt() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { user, loading: authLoading, signOut, saveScore } = useAuth();
 
+  // ── PlayData refs (all mutable, safe to read inside canvas [] effect) ──
+  const userRef = useRef<DBUser | null>(null);          // latest user object
+  const playDataRef = useRef<PlayData | null>(null);    // in-memory game stats
+  const playStartRef = useRef<number>(0);               // session start ms
+  const historicalPlayTimeRef = useRef<number>(0);      // totalPlayTime before this session
+  const playFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // debounce
+
   const antRef = useRef<AntState>({
     x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500,
     y: typeof window !== 'undefined' ? window.innerHeight / 2 : 500,
@@ -80,6 +91,10 @@ export default function OrbAnt() {
 
   const settingsRef = useRef<AppSettings>(loadSettings());
 
+  // Always keep userRef current so the canvas [] effect can read it without stale closures.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { userRef.current = user; });
+
   // Guest score carryover: if the user navigated from '/' to '/login',
   // '/' saves the current score to sessionStorage before unmounting.
   useEffect(() => {
@@ -106,6 +121,53 @@ export default function OrbAnt() {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayScore, user?.uid]);
+
+  // ── PlayData session management ────────────────────────────────────────────
+  // Fires when the logged-in user changes (login / logout / remount).
+  // • Login  → load existing stats, increment playCount, record session start.
+  // • Logout / unmount → flush final totalPlayTime to Firebase.
+  useEffect(() => {
+    if (!user) {
+      playDataRef.current = null;
+      return;
+    }
+
+    const uid = user.uid;
+    playStartRef.current = Date.now();
+    let cancelled = false;
+
+    fetchPlayData(uid).then(existing => {
+      if (cancelled) return;
+      const now = Date.now();
+      const initialized: PlayData = {
+        ...existing,
+        currentScore: 0,                         // fresh session
+        playCount: (existing.playCount ?? 0) + 1,
+        lastPlayedAt: now,
+      };
+      historicalPlayTimeRef.current = existing.totalPlayTime ?? 0;
+      playDataRef.current = initialized;
+      // Immediately record session start in Firebase
+      writePlayData(uid, {
+        currentScore: 0,
+        playCount: initialized.playCount,
+        lastPlayedAt: now,
+      }).catch(() => {});
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      // Flush accumulated play time before the session ends
+      if (!playDataRef.current) return;
+      const sessionSecs = Math.floor((Date.now() - playStartRef.current) / 1000);
+      if (playFlushTimerRef.current) clearTimeout(playFlushTimerRef.current);
+      writePlayData(uid, {
+        ...playDataRef.current,
+        totalPlayTime: historicalPlayTimeRef.current + sessionSecs,
+      }).catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -182,6 +244,35 @@ export default function OrbAnt() {
           combo.lastX = antRef.current.x;
           combo.lastY = antRef.current.y;
           shakeRef.current.timer = 5; // 5 frames shake ≈ 0.08s
+        }
+
+        // ── PlayData tracking (로그인 사용자만) ───────────────────────
+        // playDataRef / userRef 는 mutable ref — [] 클로저 안에서 항상 최신값
+        if (playDataRef.current && userRef.current) {
+          const pd = playDataRef.current;
+          pd.currentScore = newScore;
+          pd.bestScore = Math.max(pd.bestScore, newScore);
+          pd.totalScore = Math.min(pd.totalScore + points, Number.MAX_SAFE_INTEGER);
+          pd.totalCatches += 1;
+          if (isFlee) {
+            pd.fleeingCatches += 1;
+            // comboRef.count 이미 증가된 후 → maxCombo 비교
+            const curCombo = comboRef.current.count;
+            if (curCombo > pd.maxCombo) pd.maxCombo = curCombo;
+          } else {
+            pd.normalCatches += 1;
+          }
+          // 2초 디바운스 — Firebase 쓰기 빈도 제한
+          const uid = userRef.current.uid;
+          if (playFlushTimerRef.current) clearTimeout(playFlushTimerRef.current);
+          playFlushTimerRef.current = setTimeout(() => {
+            if (!playDataRef.current) return;
+            const sessionSecs = Math.floor((Date.now() - playStartRef.current) / 1000);
+            writePlayData(uid, {
+              ...playDataRef.current,
+              totalPlayTime: historicalPlayTimeRef.current + sessionSecs,
+            }).catch(() => {});
+          }, 2000);
         }
       }
 
