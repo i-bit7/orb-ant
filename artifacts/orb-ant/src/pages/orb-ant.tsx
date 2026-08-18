@@ -10,6 +10,7 @@ type ScorePopup = {
   y: number;
   value: number;
   age: number;
+  isFlee: boolean;
 };
 
 type AntState = {
@@ -43,8 +44,11 @@ export default function OrbAnt() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [homeData, setHomeData] = useState<Record<string, string> | null>(null);
   const [displayScore, setDisplayScore] = useState(0);
+  const [scoreScale, setScoreScale] = useState(1);
   const scoreRef = useRef(0);
   const popupsRef = useRef<ScorePopup[]>([]);
+  const comboRef = useRef({ count: 0, timer: 0, displayTimer: 0, lastX: 0, lastY: 0 });
+  const shakeRef = useRef({ timer: 0 });
   const { user, loading: authLoading, signIn, signOut } = useAuth();
 
   const antRef = useRef<AntState>({
@@ -143,10 +147,30 @@ export default function OrbAnt() {
       // Score: hitting the ant (within 35px)
       const HIT_RADIUS = 35;
       if (dist < HIT_RADIUS) {
-        const points = antRef.current.state === 'fleeing' ? 10 : 1;
+        const isFlee = antRef.current.state === 'fleeing';
+        const points = isFlee ? 10 : 1;
         scoreRef.current += points;
         setDisplayScore(scoreRef.current);
-        popupsRef.current.push({ x: antRef.current.x, y: antRef.current.y, value: points, age: 0 });
+        // SCORE number pulse
+        setScoreScale(isFlee ? 1.5 : 1.3);
+        setTimeout(() => setScoreScale(1), 180);
+        // Score popup
+        popupsRef.current.push({
+          x: antRef.current.x,
+          y: antRef.current.y,
+          value: points,
+          isFlee,
+          age: 0,
+        });
+        if (isFlee) {
+          const combo = comboRef.current;
+          combo.count++;
+          combo.timer = 150;           // ~2.5s window before combo resets
+          combo.displayTimer = 70;
+          combo.lastX = antRef.current.x;
+          combo.lastY = antRef.current.y;
+          shakeRef.current.timer = 5; // 5 frames shake ≈ 0.08s
+        }
       }
 
       // Existing flee trigger (unchanged)
@@ -195,12 +219,24 @@ export default function OrbAnt() {
       const dyMouse = mouse.y - ant.y;
       const distMouse = Math.sqrt(dxMouse * dxMouse + dyMouse * dyMouse);
 
+      // Combo timer tick
+      const combo = comboRef.current;
+      if (combo.timer > 0) {
+        combo.timer--;
+        if (combo.timer === 0) combo.count = 0; // timeout reset
+      }
+      if (combo.displayTimer > 0) combo.displayTimer--;
+
       if (ant.state === 'fleeing') {
         ant.fleeTimer--;
         if (ant.fleeTimer <= 0) {
           ant.state = 'wandering';
           ant.targetSpeed = 1.2 * s.ant.speedMultiplier;
           ant.lastWanderChange = time;
+          // Flee state ended — reset combo
+          combo.count = 0;
+          combo.timer = 0;
+          combo.displayTimer = 0;
         }
       } else {
         if (mouse.active && distMouse < awarenessRadius) {
@@ -275,9 +311,20 @@ export default function OrbAnt() {
       ant.x = Math.max(0, Math.min(width, ant.x));
       ant.y = Math.max(0, Math.min(height, ant.y));
 
+      // Canvas shake (+10 only)
+      const shake = shakeRef.current;
+      let shakeX = 0, shakeY = 0;
+      if (shake.timer > 0) {
+        shake.timer--;
+        const mag = shake.timer * 0.6; // decaying magnitude
+        shakeX = (Math.random() - 0.5) * mag * 2;
+        shakeY = (Math.random() - 0.5) * mag * 2;
+      }
+
       // Draw
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, width, height);
+      if (shakeX || shakeY) { ctx.save(); ctx.translate(shakeX, shakeY); }
 
       // Trail
       ctx.lineCap = 'round';
@@ -404,28 +451,79 @@ export default function OrbAnt() {
         ctx.fillText('move your cursor', width / 2, height - 24);
       }
 
-      // Score popups (+1 / +10)
+      // Score popups (+1 / +10) with spring animation
       const popups = popupsRef.current;
       for (let i = popups.length - 1; i >= 0; i--) {
         const p = popups[i];
         p.age++;
-        if (p.age > 80) { popups.splice(i, 1); continue; }
-        let pa = 0;
-        if (p.age < 10) pa = p.age / 10;
-        else if (p.age < 50) pa = 1;
-        else pa = 1 - (p.age - 50) / 30;
-        const py = p.y - (p.age / 80) * 44;
+
+        if (p.isFlee) {
+          // +10: 50 frames (~0.83s), spring bounce scale
+          if (p.age > 50) { popups.splice(i, 1); continue; }
+          const a = p.age;
+          // spring scale: 0.7 → 1.4 → 0.85 → 1.03 → 1.0
+          let sc = 1;
+          if (a < 5)       sc = 0.7 + 0.7 * (a / 5);
+          else if (a < 12) sc = 1.4 - 0.55 * ((a - 5) / 7);
+          else if (a < 18) sc = 0.85 + 0.18 * ((a - 12) / 6);
+          else if (a < 22) sc = 1.03 - 0.03 * ((a - 18) / 4);
+          // alpha: fade in 0-5, hold, fade out 40-50
+          let pa = a < 5 ? a / 5 : a > 40 ? 1 - (a - 40) / 10 : 1;
+          const floatY = p.y - a * 0.35;
+          ctx.save();
+          ctx.globalAlpha = pa;
+          ctx.translate(p.x, floatY);
+          ctx.scale(sc, sc);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '700 20px Inter, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('+10', 0, 0);
+          ctx.restore();
+        } else {
+          // +1: 36 frames (~0.6s), quick pop then float
+          if (p.age > 36) { popups.splice(i, 1); continue; }
+          const a = p.age;
+          // scale: 1.2 → 1.0 over first 6 frames, then 1.0
+          const sc = a < 6 ? 1.2 - 0.2 * (a / 6) : 1.0;
+          // alpha: fade in 0-4, hold, fade out 28-36
+          let pa = a < 4 ? a / 4 : a > 28 ? 1 - (a - 28) / 8 : 1;
+          const floatY = p.y - a * 0.85;
+          ctx.save();
+          ctx.globalAlpha = pa;
+          ctx.translate(p.x, floatY);
+          ctx.scale(sc, sc);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '400 14px Inter, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('+1', 0, 0);
+          ctx.restore();
+        }
+      }
+
+      // Combo display
+      if (combo.displayTimer > 0 && combo.count >= 2) {
+        const dt = combo.displayTimer;
+        const ca = dt > 20 ? 1 : dt / 20;
+        // Scale-in on first few frames
+        const elapsed = 70 - dt;
+        const csc = elapsed < 6 ? 0.6 + 0.4 * (elapsed / 6) : 1.0;
         ctx.save();
-        ctx.globalAlpha = pa;
+        ctx.globalAlpha = ca * 0.75;
+        ctx.translate(combo.lastX, combo.lastY + 32);
+        ctx.scale(csc, csc);
         ctx.fillStyle = '#ffffff';
-        ctx.font = p.value >= 10
-          ? '700 18px Inter, sans-serif'
-          : '400 14px Inter, sans-serif';
+        ctx.font = '300 10px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`+${p.value}`, p.x, py);
+        ctx.letterSpacing = '0.12em';
+        ctx.fillText(`COMBO ×${combo.count}`, 0, 0);
         ctx.restore();
       }
+
+      // End shake translate
+      if (shakeX || shakeY) ctx.restore();
 
       // Flee notice
       if (state.noticeTimer >= 0) {
@@ -507,7 +605,15 @@ export default function OrbAnt() {
             letterSpacing: '0.12em',
           }}
         >
-          SCORE&nbsp;&nbsp;{displayScore}
+          SCORE&nbsp;&nbsp;<span
+            style={{
+              display: 'inline-block',
+              transform: `scale(${scoreScale})`,
+              transition: 'transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)',
+              transformOrigin: 'center center',
+              color: scoreScale > 1 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)',
+            }}
+          >{displayScore}</span>
         </p>
       </div>
 
