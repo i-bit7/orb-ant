@@ -144,13 +144,20 @@ export default function OrbAnt() {
       const dy = antRef.current.y - clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // Score: hitting the ant (within 35px)
-      const HIT_RADIUS = 35;
+      // Score: hitting the ant
+      // HIT_RADIUS 60px — ant body is ~50px wide; at flee speed 6.5px/frame
+      // a 35px radius was too tight and missed most clicks on a moving ant.
+      const HIT_RADIUS = 60;
       if (dist < HIT_RADIUS) {
         const isFlee = antRef.current.state === 'fleeing';
         const points = isFlee ? 10 : 1;
-        scoreRef.current += points;
-        setDisplayScore(scoreRef.current);
+        // Functional update: guarantees accumulation even under React 18 batching.
+        // scoreRef stays in sync so the loop can read it if needed.
+        setDisplayScore(prev => {
+          const next = prev + points;
+          scoreRef.current = next;
+          return next;
+        });
         // SCORE number pulse
         setScoreScale(isFlee ? 1.5 : 1.3);
         setTimeout(() => setScoreScale(1), 180);
